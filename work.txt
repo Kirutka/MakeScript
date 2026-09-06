@@ -1,0 +1,32 @@
+Полное обновление системы
+Установка базовых пакетов 
+Установка Zsh + Oh My Zsh + плагины
+Установка Docker + Docker Compose
+Установка kubectl
+Установка Terraform 
+Установка Grafana 
+Установка Loki
+Установка Prometheus
+Helm
+Firefox
+VS Code
+Docker Desktop
+Telegram
+MAX
+
+плагины для Zsh:
+1) zsh-autosuggestions          предлагает команды из истории 
+2) zsh-syntax-highlighting      подсвечивает команды, зелёным правильная, красным неправильная
+3) docker 
+4) git 
+5) docker compose 
+6) colored-man-pages
+7) web-search 
+8) kubectl
+9) terraform 
+10) helm 
+11) extract
+12) command-not-found
+13) ansible 
+14) vs code 
+15) colorize
