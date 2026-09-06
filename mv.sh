@@ -59,13 +59,14 @@ manage_zsh_plugins() {
         echo "В .zshrc нет строки plugins=(...). Добавьте её вручную."
         return 1
     fi
+    
     local plugins_str
     plugins_str=$(echo "$current_line" | sed -E 's/^plugins=\(//' | sed -E 's/\)$//' | tr -d '"' | tr -d "'")
     IFS=' ' read -r -a current_plugins <<< "$plugins_str"
 
     declare -A selected_map
     for p in "${current_plugins[@]}"; do
-        selected_map["$p"]=1
+        [[ -n "$p" ]] && selected_map["$p"]=1
     done
 
     local page=0
@@ -76,9 +77,8 @@ manage_zsh_plugins() {
         clear
         local start=$((page * page_size))
         local end=$((start + page_size - 1))
-        if (( end >= ${#all_plugins[@]} )); then
-            end=$(( ${#all_plugins[@]} - 1 ))
-        fi
+        (( end >= ${#all_plugins[@]} )) && end=$(( ${#all_plugins[@]} - 1 ))
+        
         echo "=== Плагины Oh My Zsh (страница $((page+1))/$total_pages) ==="
         echo "  [x] - включён, [ ] - выключен"
         for (( i=start; i<=end; i++ )); do
@@ -92,8 +92,8 @@ manage_zsh_plugins() {
         echo "--- Показано $((end-start+1)) из ${#all_plugins[@]} плагинов ---"
         echo ""
         echo "Управление:"
-        echo "  5                 - вкл/выкл плагин"
-        echo "  1-5    		      - вкл/выкл группу"
+        echo "  <номер>           - вкл/выкл плагин"
+        echo "  <нач>-<кон>       - вкл/выкл диапазон"
         echo "  a/d               - назад/вперёд"
         echo "  q                 - сохранить и выйти"
         echo ""
@@ -120,65 +120,37 @@ manage_zsh_plugins() {
         read -r input
 
         case "$input" in
-            q|Q)
-                break
-                ;;
+            q|Q) break ;;
             a|A)
-                if (( page > 0 )); then
-                    page=$((page - 1))
-                else
-                    echo "Вы уже на первой странице."
-                    read -p "Нажмите Enter..."
-                fi
-                ;;
+                if (( page > 0 )); then ((page--)); else echo "Первая страница"; read -p "Enter..."; fi ;;
             d|D)
-                if (( page < total_pages - 1 )); then
-                    page=$((page + 1))
-                else
-                    echo "Вы уже на последней странице."
-                    read -p "Нажмите Enter..."
-                fi
-                ;;
-            "")
-                continue
-                ;;
+                if (( page < total_pages - 1 )); then ((page++)); else echo "Последняя страница"; read -p "Enter..."; fi ;;
+            "") continue ;;
             *)
                 input="${input//,/ }"
                 read -r -a tokens <<< "$input"
-                
                 local has_error=0
                 for token in "${tokens[@]}"; do
                     if [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-                        local start_r="${BASH_REMATCH[1]}"
-                        local end_r="${BASH_REMATCH[2]}"
-                        if (( start_r <= end_r )); then
-                            for (( k=start_r; k<=end_r; k++ )); do
-                                toggle_plugin_by_index $k
-                            done
-                        else
-                            echo "Неверный диапазон: $token"
-                            has_error=1
-                        fi
+                        local s="${BASH_REMATCH[1]}" e="${BASH_REMATCH[2]}"
+                        if (( s <= e )); then
+                            for (( k=s; k<=e; k++ )); do toggle_plugin_by_index $k; done
+                        else echo "Неверный диапазон"; has_error=1; fi
                     elif [[ "$token" =~ ^[0-9]+$ ]]; then
                         toggle_plugin_by_index "$token"
                     else
-                        echo "Неизвестная команда или формат: '$token'. Используйте числа, диапазоны (1-5), a, d или q."
+                        echo "Неизвестная команда: '$token'"
                         has_error=1
                     fi
                 done
-                
-                if (( has_error == 1 )); then
-                    read -p "Нажмите Enter..."
-                fi
+                (( has_error == 1 )) && read -p "Нажмите Enter..."
                 ;;
         esac
     done
 
     local new_plugins=()
     for p in "${all_plugins[@]}"; do
-        if [[ -n "${selected_map[$p]}" ]]; then
-            new_plugins+=("$p")
-        fi
+        [[ -n "${selected_map[$p]}" ]] && new_plugins+=("$p")
     done
     for p in "${current_plugins[@]}"; do
         if [[ -z "${selected_map[$p]}" ]] && [[ ! " ${all_plugins[*]} " =~ " $p " ]]; then
@@ -193,8 +165,125 @@ manage_zsh_plugins() {
     echo "Не забудьте: source ~/.zshrc"
 }
 
+# ---- Функция управления темами Zsh ----
+manage_zsh_theme() {
+    local zshrc="$HOME/.zshrc"
+    local omz_dir="$HOME/.oh-my-zsh"
+    local themes_dir="$omz_dir/themes"
+
+    if [[ ! -d "$omz_dir" ]]; then
+        echo "Oh My Zsh не установлен. Сначала выполните пункт 3."
+        return 1
+    fi
+    if [[ ! -f "$zshrc" ]]; then
+        echo "Файл $zshrc не найден."
+        return 1
+    fi
+
+    mapfile -t all_themes < <(find "$themes_dir" -maxdepth 1 -name "*.zsh-theme" -printf "%f\n" | sed 's/\.zsh-theme$//' | sort)
+    if [[ ${#all_themes[@]} -eq 0 ]]; then
+        echo "Темы не найдены в $themes_dir"
+        return 1
+    fi
+
+    local current_theme="robbyrussell"
+    local theme_line
+    theme_line=$(grep -E '^ZSH_THEME=' "$zshrc")
+    if [[ -n "$theme_line" ]]; then
+        current_theme=$(echo "$theme_line" | sed -E 's/^ZSH_THEME=["'"'"']?([^"'"'"']+)["'"'"']?$/\1/')
+    fi
+
+    local selected_theme="$current_theme"
+    local page=0
+    local page_size=20
+    local total_pages=$(( (${#all_themes[@]} + page_size - 1) / page_size ))
+
+    show_page() {
+        clear
+        local start=$((page * page_size))
+        local end=$((start + page_size - 1))
+        (( end >= ${#all_themes[@]} )) && end=$(( ${#all_themes[@]} - 1 ))
+        
+        echo "=== Темы Oh My Zsh (страница $((page+1))/$total_pages) ==="
+        echo "Текущая сохраненная тема: $current_theme"
+        echo "  [*] - выбрана сейчас"
+        echo ""
+        for (( i=start; i<=end; i++ )); do
+            local t="${all_themes[i]}"
+            if [[ "$t" == "$selected_theme" ]]; then
+                printf "%3d. [*] %s\n" $((i+1)) "$t"
+            else
+                printf "%3d. [ ] %s\n" $((i+1)) "$t"
+            fi
+        done
+        echo "--- Показано $((end-start+1)) из ${#all_themes[@]} тем ---"
+        echo ""
+        echo "Управление:"
+        echo "  <номер>     - выбрать тему"
+        echo "  a/d         - назад/вперёд"
+        echo "  s           - сохранить и выйти"
+        echo "  q           - выйти без сохранения"
+        echo ""
+        echo -n "Ваш ввод: "
+    }
+
+    select_theme_by_index() {
+        local idx=$1
+        if (( idx >= 1 && idx <= ${#all_themes[@]} )); then
+            selected_theme="${all_themes[$((idx-1))]}"
+        else
+            echo "Номер $idx вне диапазона (1-${#all_themes[@]})"
+            read -p "Нажмите Enter..."
+        fi
+    }
+
+    while true; do
+        show_page
+        read -r input
+        case "$input" in
+            s|S) break ;;
+            q|Q) echo "Изменения отменены."; return 0 ;;
+            a|A) (( page > 0 )) && ((page--)) || { echo "Первая страница"; read -p "Enter..."; } ;;
+            d|D) (( page < total_pages - 1 )) && ((page++)) || { echo "Последняя страница"; read -p "Enter..."; } ;;
+            "") continue ;;
+            *)
+                if [[ "$input" =~ ^[0-9]+$ ]]; then
+                    select_theme_by_index "$input"
+                else
+                    echo "Используйте числа, a, d, s или q."
+                    read -p "Нажмите Enter..."
+                fi
+                ;;
+        esac
+    done
+
+    if [[ "$selected_theme" == "$current_theme" ]]; then
+        echo "Тема не была изменена."
+        return 0
+    fi
+
+    cp "$zshrc" "$zshrc.bak"
+    if grep -qE '^ZSH_THEME=' "$zshrc"; then
+        sed -i "s|^ZSH_THEME=.*|ZSH_THEME=\"$selected_theme\"|" "$zshrc"
+    else
+        sed -i "1i ZSH_THEME=\"$selected_theme\"" "$zshrc"
+    fi
+
+    echo "Тема изменена на: $selected_theme"
+    echo "Резервная копия: $zshrc.bak"
+    echo "Выполните: source ~/.zshrc"
+}
+
 # ---- Функция управления сторонними плагинами ----
 manage_external_plugins() {
+    # ПРОВЕРКА GIT
+    if ! command -v git &>/dev/null; then
+        echo "ОШИБКА: Git не установлен!"
+        echo "Установите его через пункт 1 или вручную: sudo apt install git"
+        read -p "Нажмите Enter..."
+        return 1
+    fi
+
     local custom_plugins_dir="$HOME/.oh-my-zsh/custom/plugins"
     local zshrc="$HOME/.zshrc"
 
@@ -215,16 +304,16 @@ manage_external_plugins() {
     local current_line
     current_line=$(grep -E '^plugins=\(.*\)' "$zshrc")
     if [[ -z "$current_line" ]]; then
-        echo "В .zshrc нет строки plugins=(...). Добавьте её вручную или установите встроенные плагины."
+        echo "В .zshrc нет строки plugins=(...). Сначала настройте встроенные плагины (пункт 4)."
         return 1
     fi
+    
     local plugins_str
     plugins_str=$(echo "$current_line" | sed -E 's/^plugins=\(//' | sed -E 's/\)$//' | tr -d '"' | tr -d "'")
     IFS=' ' read -r -a current_zsh_plugins <<< "$plugins_str"
 
     local ext_names=()
     declare -A ext_urls
-    
     for name in "${!known_plugins[@]}"; do
         ext_names+=("$name")
         ext_urls["$name"]="${known_plugins[$name]}"
@@ -233,15 +322,20 @@ manage_external_plugins() {
 
     declare -A installed_map
     for name in "${sorted_names[@]}"; do
-        if [[ -d "$custom_plugins_dir/$name" ]] && [[ " ${current_zsh_plugins[*]} " =~ " $name " ]]; then
+        if [[ -d "$custom_plugins_dir/$name" ]]; then
             installed_map["$name"]=1
+            if [[ ! " ${current_zsh_plugins[*]} " =~ " $name " ]]; then
+                sed -i "s/^plugins=(\(.*\))/plugins=(\1 $name)/" "$zshrc"
+                current_zsh_plugins+=("$name")
+            fi
         fi
     done
 
     while true; do
         clear
         echo "=== Сторонние плагины ==="
-        echo "  [x] - включен, [ ] - выключен"
+        echo "  [x] - установлен и включен"
+        echo "  [ ] - не установлен"
         echo ""
         
         local idx=1
@@ -251,19 +345,16 @@ manage_external_plugins() {
             else
                 printf "%3d. [ ] %s\n" $idx "$name"
             fi
-            idx=$((idx + 1))
+            ((idx++))
         done
         
         echo ""
         echo "q. Выход"
-        echo ""
         echo -n "Выберите номер для переключения: "
         read -r input
 
         case "$input" in
-            q|Q)
-                break
-                ;;
+            q|Q) break ;;
             *)
                 if [[ "$input" =~ ^[0-9]+$ ]]; then
                     local choice_idx=$((input))
@@ -281,13 +372,21 @@ manage_external_plugins() {
                             echo "Плагин удален."
                         else
                             echo "Установка плагина $selected_name..."
-                            if git clone "$repo_url" "$target_dir" 2>/dev/null; then
-                                sed -i "s/^plugins=(\(.*\))/plugins=(\1 $selected_name)/" "$zshrc"
-                                installed_map["$selected_name"]=1
-                                echo "Плагин установлен и добавлен в конфиг."
+                            
+                            if [[ -d "$target_dir" ]]; then
+                                echo "Папка уже существует. Подключаю к конфигу..."
+                            elif git clone "$repo_url" "$target_dir"; then
+                                echo "Клонирование успешно."
                             else
-                                echo "Ошибка клонирования."
+                                echo "ОШИБКА КЛОНИРОВАНИЯ!"
+                                echo "Проверьте интернет, доступность GitHub или права доступа."
+                                read -p "Нажмите Enter..."
+                                continue
                             fi
+                            
+                            sed -i "s/^plugins=(\(.*\))/plugins=(\1 $selected_name)/" "$zshrc"
+                            installed_map["$selected_name"]=1
+                            echo "Плагин установлен и добавлен в конфиг."
                         fi
                         read -p "Нажмите Enter..."
                     else
@@ -301,7 +400,7 @@ manage_external_plugins() {
                 ;;
         esac
     done
-    echo "Не забудьте перезагрузить терминал или выполнить: source ~/.zshrc"
+    echo "Не забудьте: source ~/.zshrc"
 }
 
 # ---- Меню ----
@@ -311,6 +410,7 @@ options=(
     "3 - Установка Zsh + Oh My Zsh"
     "4 - Управление встроенными плагинами Zsh"
     "5 - Управление сторонними плагинами"
+    "6 - Выбор темы Zsh"
     "0 - Выход"
 )
 
@@ -324,6 +424,7 @@ while true; do
             3) install_Zsh_OMZ_plugins; break ;;
             4) manage_zsh_plugins; break ;;
             5) manage_external_plugins; break ;;
+            6) manage_zsh_theme; break ;;
             0) echo "Выход"; exit 0 ;;
             *) echo "Неправильный ввод" ;;
         esac

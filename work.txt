@@ -1,7 +1,7 @@
 Полное обновление системы + 
 Установка базовых пакетов 
 Установка Zsh + Oh My Zsh +
-Управление плагинами Zsh
+Управление плагинами Zsh +
 Установка Docker + Docker Compose
 Установка kubectl
 Установка Terraform 
@@ -15,19 +15,9 @@ Docker Desktop
 Telegram
 MAX
 
-плагины для Zsh:
-1) zsh-autosuggestions          предлагает команды из истории 
-2) zsh-syntax-highlighting      подсвечивает команды, зелёным правильная, красным неправильная
-3) docker 
-4) git 
-5) docker compose 
-6) colored-man-pages
-7) web-search 
-8) kubectl
-9) terraform 
-10) helm 
-11) extract
-12) command-not-found
-13) ansible 
-14) vs code 
-15) colorize
+docker.io
+docker-compose-v2
+grafana 
+loki 
+prometheus 
+helm 
