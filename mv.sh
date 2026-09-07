@@ -175,19 +175,17 @@ manage_zsh_plugins() {
 # ---- Функция выбора и установки базовых утилит ----
 manage_basic_utils() {
     local utils_list=(
-        "Git (система контроля версий):git"
-        "Curl (передача данных по URL):curl"
-        "Wget (загрузка файлов):wget"
-        "Build-Essential (компиляторы gcc/make):build-essential"
-        "Htop (монитор процессов):htop"
-        "Neofetch (инфо о системе):neofetch"
-        "Tree (визуализация папок):tree"
-        "Jq (работа с JSON):jq"
-        "Vim (текстовый редактор):vim"
-        "Nano (простой редактор):nano"
-        "Python3 PIP (менеджер пакетов Python):python3-pip"
-        "Node.js (среда выполнения JS):nodejs"
-        "NPM (менеджер пакетов Node):npm"
+        "git:git"
+        "curl:curl"
+        "wget:wget"
+        "build-essential (компиляторы gcc/make):build-essential"
+        "htop:htop"
+        "jq:jq"
+        "vim (текстовый редактор):vim"
+        "nano (простой редактор):nano"
+        "python3-pip (менеджер пакетов Python):python3-pip"
+        "node.js (среда выполнения JS):nodejs"
+        "npm (менеджер пакетов Node):npm"
     )
 
     local names=()
