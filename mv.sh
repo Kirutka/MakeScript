@@ -12,17 +12,18 @@ update_system() {
 
 # ---- Функция установки Zsh + Oh My Zsh ----
 install_Zsh_OMZ_plugins() {
-    if ! command -v zsh &>/dev/null; then
-        sudo apt update && sudo apt install -y zsh
-        echo "Установка Zsh завершена!"
-    else 
+    if command -v zsh &>/dev/null; then
         echo "Zsh уже установлен"
+    else
+        sudo apt update && sudo apt install -y zsh
+        echo "Установка Zsh завершена!" 
+        
     fi
 
     if [ -d "$HOME/.oh-my-zsh" ]; then
         echo "Oh My Zsh уже установлен"
     else 
-        if ! command -v curl &>/dev/null && ! command -v wget &>/dev/null; then
+        if ! command -v curl &>/dev/null; then
             echo "Устанавливаю curl для установки Oh My Zsh"
             sudo apt install -y curl
         fi
@@ -47,9 +48,10 @@ manage_zsh_plugins() {
         return 1
     fi
 
-    mapfile -t all_plugins < <(find "$omz_dir/plugins" -maxdepth 1 -type d -printf "%f\n" | grep -v '^plugins$' | grep -v '^\.' | sort)
-    if [[ ${#all_plugins[@]} -eq 0 ]]; then
-        echo "Нет плагинов."
+    mapfile -t all_builtin_plugins < <(find "$omz_dir/plugins" -maxdepth 1 -type d -printf "%f\n" | grep -v '^plugins$' | grep -v '^\.' | sort)
+    
+    if [[ ${#all_builtin_plugins[@]} -eq 0 ]]; then
+        echo "Нет встроенных плагинов."
         return 1
     fi
 
@@ -62,55 +64,56 @@ manage_zsh_plugins() {
     
     local plugins_str
     plugins_str=$(echo "$current_line" | sed -E 's/^plugins=\(//' | sed -E 's/\)$//' | tr -d '"' | tr -d "'")
-    IFS=' ' read -r -a current_plugins <<< "$plugins_str"
+    IFS=' ' read -r -a current_all_plugins <<< "$plugins_str"
 
-    declare -A selected_map
-    for p in "${current_plugins[@]}"; do
-        [[ -n "$p" ]] && selected_map["$p"]=1
+    declare -A selected_builtin_map
+    for p in "${current_all_plugins[@]}"; do
+        if [[ " ${all_builtin_plugins[*]} " =~ " $p " ]]; then
+            selected_builtin_map["$p"]=1
+        fi
     done
 
     local page=0
     local page_size=20
-    local total_pages=$(( (${#all_plugins[@]} + page_size - 1) / page_size ))
+    local total_pages=$(( (${#all_builtin_plugins[@]} + page_size - 1) / page_size ))
 
     show_page() {
         clear
         local start=$((page * page_size))
         local end=$((start + page_size - 1))
-        (( end >= ${#all_plugins[@]} )) && end=$(( ${#all_plugins[@]} - 1 ))
+        (( end >= ${#all_builtin_plugins[@]} )) && end=$(( ${#all_builtin_plugins[@]} - 1 ))
         
-        echo "=== Плагины Oh My Zsh (страница $((page+1))/$total_pages) ==="
+        echo "=== Встроенные плагины Oh My Zsh (страница $((page+1))/$total_pages) ==="
         echo "  [x] - включён, [ ] - выключен"
         for (( i=start; i<=end; i++ )); do
-            local p="${all_plugins[i]}"
-            if [[ -n "${selected_map[$p]}" ]]; then
+            local p="${all_builtin_plugins[i]}"
+            if [[ -n "${selected_builtin_map[$p]}" ]]; then
                 printf "%3d. [x] %s\n" $((i+1)) "$p"
             else
                 printf "%3d. [ ] %s\n" $((i+1)) "$p"
             fi
         done
-        echo "--- Показано $((end-start+1)) из ${#all_plugins[@]} плагинов ---"
+        echo "--- Показано $((end-start+1)) из ${#all_builtin_plugins[@]} плагинов ---"
         echo ""
         echo "Управление:"
-        echo "  <номер>           - вкл/выкл плагин"
-        echo "  <нач>-<кон>       - вкл/выкл диапазон"
-        echo "  a/d               - назад/вперёд"
-        echo "  q                 - сохранить и выйти"
+        echo "  <номер>         - вкл/выкл"
+        echo "  a/d             - назад/вперёд"
+        echo "  q               - сохранить и выйти"
         echo ""
         echo -n "Ваш ввод: "
     }
 
     toggle_plugin_by_index() {
         local idx=$1
-        if (( idx >= 1 && idx <= ${#all_plugins[@]} )); then
-            local p="${all_plugins[$((idx-1))]}"
-            if [[ -n "${selected_map[$p]}" ]]; then
-                unset 'selected_map[$p]'
+        if (( idx >= 1 && idx <= ${#all_builtin_plugins[@]} )); then
+            local p="${all_builtin_plugins[$((idx-1))]}"
+            if [[ -n "${selected_builtin_map[$p]}" ]]; then
+                unset 'selected_builtin_map[$p]'
             else
-                selected_map["$p"]=1
+                selected_builtin_map["$p"]=1
             fi
         else
-            echo "Номер $idx вне диапазона (1-${#all_plugins[@]})"
+            echo "Номер $idx вне диапазона"
             read -p "Нажмите Enter..."
         fi
     }
@@ -127,41 +130,45 @@ manage_zsh_plugins() {
                 if (( page < total_pages - 1 )); then ((page++)); else echo "Последняя страница"; read -p "Enter..."; fi ;;
             "") continue ;;
             *)
-                input="${input//,/ }"
-                read -r -a tokens <<< "$input"
-                local has_error=0
-                for token in "${tokens[@]}"; do
-                    if [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-                        local s="${BASH_REMATCH[1]}" e="${BASH_REMATCH[2]}"
-                        if (( s <= e )); then
-                            for (( k=s; k<=e; k++ )); do toggle_plugin_by_index $k; done
-                        else echo "Неверный диапазон"; has_error=1; fi
-                    elif [[ "$token" =~ ^[0-9]+$ ]]; then
-                        toggle_plugin_by_index "$token"
-                    else
-                        echo "Неизвестная команда: '$token'"
-                        has_error=1
-                    fi
-                done
-                (( has_error == 1 )) && read -p "Нажмите Enter..."
+                if [[ "$input" =~ ^[0-9]+$ ]]; then
+                    toggle_plugin_by_index "$input"
+                else
+                    echo "Используйте числа или a/d/q"
+                    read -p "Нажмите Enter..."
+                fi
                 ;;
         esac
     done
 
-    local new_plugins=()
-    for p in "${all_plugins[@]}"; do
-        [[ -n "${selected_map[$p]}" ]] && new_plugins+=("$p")
-    done
-    for p in "${current_plugins[@]}"; do
-        if [[ -z "${selected_map[$p]}" ]] && [[ ! " ${all_plugins[*]} " =~ " $p " ]]; then
-            new_plugins+=("$p")
+    local final_plugins=()
+    
+    for p in "${all_builtin_plugins[@]}"; do
+        if [[ -n "${selected_builtin_map[$p]}" ]]; then
+            final_plugins+=("$p")
         fi
     done
 
-    local new_line="plugins=(${new_plugins[*]})"
+    for p in "${current_all_plugins[@]}"; do
+        if [[ ! " ${all_builtin_plugins[*]} " =~ " $p " ]]; then
+            final_plugins+=("$p")
+        fi
+    done
+
+    local unique_plugins=()
+    declare -A seen
+    for p in "${final_plugins[@]}"; do
+        if [[ -z "${seen[$p]}" ]]; then
+            unique_plugins+=("$p")
+            seen["$p"]=1
+        fi
+    done
+
+    local new_line="plugins=(${unique_plugins[*]})"
     cp "$zshrc" "$zshrc.bak"
     sed -i "s|^plugins=(.*)|$new_line|" "$zshrc"
-    echo "$zshrc обновлён. Резервная копия: $zshrc.bak"
+    
+    echo "$zshrc обновлён."
+    echo "Сохранено плагинов: ${#unique_plugins[@]}"
     echo "Не забудьте: source ~/.zshrc"
 }
 
@@ -219,10 +226,10 @@ manage_zsh_theme() {
         echo "--- Показано $((end-start+1)) из ${#all_themes[@]} тем ---"
         echo ""
         echo "Управление:"
-        echo "  <номер>     - выбрать тему"
+        echo "  5           - установить тему"
         echo "  a/d         - назад/вперёд"
-        echo "  s           - сохранить и выйти"
-        echo "  q           - выйти без сохранения"
+        echo "  q           - сохранить и выйти"
+        echo "  s           - выйти без сохранения"
         echo ""
         echo -n "Ваш ввод: "
     }
@@ -241,8 +248,8 @@ manage_zsh_theme() {
         show_page
         read -r input
         case "$input" in
-            s|S) break ;;
-            q|Q) echo "Изменения отменены."; return 0 ;;
+            q|S) break ;;
+            s|Q) echo "Изменения отменены."; return 0 ;;
             a|A) (( page > 0 )) && ((page--)) || { echo "Первая страница"; read -p "Enter..."; } ;;
             d|D) (( page < total_pages - 1 )) && ((page++)) || { echo "Последняя страница"; read -p "Enter..."; } ;;
             "") continue ;;
