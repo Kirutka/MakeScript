@@ -84,11 +84,11 @@ manage_zsh_plugins() {
         (( end >= ${#all_builtin_plugins[@]} )) && end=$(( ${#all_builtin_plugins[@]} - 1 ))
         
         echo "=== Встроенные плагины Oh My Zsh (страница $((page+1))/$total_pages) ==="
-        echo "  [x] - включён, [ ] - выключен"
+        echo "  [✓] - включён, [ ] - выключен"
         for (( i=start; i<=end; i++ )); do
             local p="${all_builtin_plugins[i]}"
             if [[ -n "${selected_builtin_map[$p]}" ]]; then
-                printf "%3d. [x] %s\n" $((i+1)) "$p"
+                printf "%3d. [✓] %s\n" $((i+1)) "$p"
             else
                 printf "%3d. [ ] %s\n" $((i+1)) "$p"
             fi
@@ -172,6 +172,147 @@ manage_zsh_plugins() {
     echo "Не забудьте: source ~/.zshrc"
 }
 
+# ---- Функция выбора и установки базовых утилит ----
+manage_basic_utils() {
+    local utils_list=(
+        "Git (система контроля версий):git"
+        "Curl (передача данных по URL):curl"
+        "Wget (загрузка файлов):wget"
+        "Build-Essential (компиляторы gcc/make):build-essential"
+        "Htop (монитор процессов):htop"
+        "Neofetch (инфо о системе):neofetch"
+        "Tree (визуализация папок):tree"
+        "Jq (работа с JSON):jq"
+        "Vim (текстовый редактор):vim"
+        "Nano (простой редактор):nano"
+        "Python3 PIP (менеджер пакетов Python):python3-pip"
+        "Node.js (среда выполнения JS):nodejs"
+        "NPM (менеджер пакетов Node):npm"
+    )
+
+    local names=()
+    local packages=()
+    
+    for item in "${utils_list[@]}"; do
+        names+=("${item%%:*}")
+        packages+=("${item##*:}")
+    done
+
+    declare -A installed_map
+    for pkg in "${packages[@]}"; do
+        if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "installed"; then
+            installed_map["$pkg"]=1
+        fi
+    done
+
+    local page=0
+    local page_size=15
+    local total_pages=$(( (${#names[@]} + page_size - 1) / page_size ))
+    
+    declare -A user_selection
+
+    show_page() {
+        clear
+        local start=$((page * page_size))
+        local end=$((start + page_size - 1))
+        (( end >= ${#names[@]} )) && end=$(( ${#names[@]} - 1 ))
+        
+        echo "=== Базовые утилиты (страница $((page+1))/$total_pages) ==="
+        echo "  [✓] - выбрано к установке / уже стоит, [ ] - пропустить"
+        echo ""
+        for (( i=start; i<=end; i++ )); do
+            local name="${names[$i]}"
+            local pkg="${packages[$i]}"
+            local status_char="[ ]"
+            
+            if [[ -n "${installed_map[$pkg]}" ]]; then
+                status_char="[✓]" 
+            elif [[ -n "${user_selection[$pkg]}" ]]; then
+                status_char="[✓]" 
+            fi
+            
+            printf "%3d. %s %s\n" $((i+1)) "$status_char" "$name"
+        done
+        echo ""
+        echo "Управление:"
+        echo "  <номер>       - выбрать/снять выбор"
+        echo "  a/d           - назад/вперёд"
+        echo "  i             - установить выбранное"
+        echo "  q             - выход"
+        echo ""
+        echo -n "Ваш ввод: "
+    }
+
+    toggle_util_by_index() {
+        local idx=$1
+        if (( idx >= 1 && idx <= ${#packages[@]} )); then
+            local pkg="${packages[$((idx-1))]}"
+            
+            if [[ -n "${installed_map[$pkg]}" ]]; then
+                echo "Пакет '$pkg' уже установлен в системе."
+                read -p "Нажмите Enter..."
+            else
+                if [[ -n "${user_selection[$pkg]}" ]]; then
+                    unset 'user_selection[$pkg]'
+                else
+                    user_selection["$pkg"]=1
+                fi
+            fi
+        else
+            echo "Номер $idx вне диапазона"
+            read -p "Нажмите Enter..."
+        fi
+    }
+
+    while true; do
+        show_page
+        read -r input
+
+        case "$input" in
+            q|Q) break ;;
+            i|I)
+                local to_install=()
+                for pkg in "${packages[@]}"; do
+                    if [[ -n "${user_selection[$pkg]}" ]] && [[ -z "${installed_map[$pkg]}" ]]; then
+                        to_install+=("$pkg")
+                    fi
+                done
+
+                if [[ ${#to_install[@]} -eq 0 ]]; then
+                    echo "Нечего устанавливать. Отметьте нужные утилиты галочками."
+                    read -p "Нажмите Enter..."
+                else
+                    echo "Будут установлены: ${to_install[*]}"
+                    echo -n "Подтвердить установку? (y/n): "
+                    read -r confirm
+                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                        sudo apt update
+                        sudo apt install -y "${to_install[@]}"
+                        for pkg in "${to_install[@]}"; do
+                            installed_map["$pkg"]=1
+                        done
+                        echo "Установка завершена!"
+                        read -p "Нажмите Enter..."
+                    fi
+                fi
+                ;;
+            a|A)
+                if (( page > 0 )); then ((page--)); else echo "Первая страница"; read -p "Enter..."; fi ;;
+            d|D)
+                if (( page < total_pages - 1 )); then ((page++)); else echo "Последняя страница"; read -p "Enter..."; fi ;;
+            "") continue ;;
+            *)
+                if [[ "$input" =~ ^[0-9]+$ ]]; then
+                    toggle_util_by_index "$input"
+                else
+                    echo "Используйте числа, a, d, i или q"
+                    read -p "Нажмите Enter..."
+                fi
+                ;;
+        esac
+    done
+}
+
 # ---- Функция управления темами Zsh ----
 manage_zsh_theme() {
     local zshrc="$HOME/.zshrc"
@@ -213,12 +354,12 @@ manage_zsh_theme() {
         
         echo "=== Темы Oh My Zsh (страница $((page+1))/$total_pages) ==="
         echo "Текущая сохраненная тема: $current_theme"
-        echo "  [*] - выбрана сейчас"
+        echo "  [✓] - выбрана сейчас"
         echo ""
         for (( i=start; i<=end; i++ )); do
             local t="${all_themes[i]}"
             if [[ "$t" == "$selected_theme" ]]; then
-                printf "%3d. [*] %s\n" $((i+1)) "$t"
+                printf "%3d. [✓] %s\n" $((i+1)) "$t"
             else
                 printf "%3d. [ ] %s\n" $((i+1)) "$t"
             fi
@@ -226,10 +367,10 @@ manage_zsh_theme() {
         echo "--- Показано $((end-start+1)) из ${#all_themes[@]} тем ---"
         echo ""
         echo "Управление:"
-        echo "  5           - установить тему"
-        echo "  a/d         - назад/вперёд"
-        echo "  q           - сохранить и выйти"
-        echo "  s           - выйти без сохранения"
+        echo "  <номер>       - выбрать тему"
+        echo "  a/d           - назад/вперёд"
+        echo "  s             - сохранить и выйти"
+        echo "  q             - выйти без сохранения"
         echo ""
         echo -n "Ваш ввод: "
     }
@@ -248,8 +389,8 @@ manage_zsh_theme() {
         show_page
         read -r input
         case "$input" in
-            q|S) break ;;
-            s|Q) echo "Изменения отменены."; return 0 ;;
+            s|S) break ;;
+            q|Q) echo "Изменения отменены."; return 0 ;;
             a|A) (( page > 0 )) && ((page--)) || { echo "Первая страница"; read -p "Enter..."; } ;;
             d|D) (( page < total_pages - 1 )) && ((page++)) || { echo "Последняя страница"; read -p "Enter..."; } ;;
             "") continue ;;
@@ -286,7 +427,7 @@ manage_external_plugins() {
     # ПРОВЕРКА GIT
     if ! command -v git &>/dev/null; then
         echo "ОШИБКА: Git не установлен!"
-        echo "Установите его через пункт 1 или вручную: sudo apt install git"
+        echo "Установите его через пункт 2 или вручную: sudo apt install git"
         read -p "Нажмите Enter..."
         return 1
     fi
@@ -341,14 +482,14 @@ manage_external_plugins() {
     while true; do
         clear
         echo "=== Сторонние плагины ==="
-        echo "  [x] - установлен и включен"
+        echo "  [✓] - установлен и включен"
         echo "  [ ] - не установлен"
         echo ""
         
         local idx=1
         for name in "${sorted_names[@]}"; do
             if [[ -n "${installed_map[$name]}" ]]; then
-                printf "%3d. [x] %s\n" $idx "$name"
+                printf "%3d. [✓] %s\n" $idx "$name"
             else
                 printf "%3d. [ ] %s\n" $idx "$name"
             fi
@@ -413,7 +554,7 @@ manage_external_plugins() {
 # ---- Меню ----
 options=(
     "1 - Полное обновление системы"
-    "2 - Установка базовых утилит (нет)"
+    "2 - Установка базовых утилит"
     "3 - Установка Zsh + Oh My Zsh"
     "4 - Управление встроенными плагинами Zsh"
     "5 - Управление сторонними плагинами"
@@ -428,6 +569,7 @@ while true; do
     select choice in "${options[@]}"; do
         case $REPLY in
             1) update_system; break ;;
+            2) manage_basic_utils; break ;;
             3) install_Zsh_OMZ_plugins; break ;;
             4) manage_zsh_plugins; break ;;
             5) manage_external_plugins; break ;;
