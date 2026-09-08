@@ -3,28 +3,215 @@ set -o pipefail
 
 echo "Добро пожаловать в MS!"
 
-# ---- Функция обновления системы ----
-update_system() {
-    echo "Полное обновление системы"
-    sudo apt update && sudo apt full-upgrade -y && sudo apt autoremove -y && sudo apt autoclean -y
-    echo "Система обновлена"
+# ============================================================================
+# УНИВЕРСАЛЬНАЯ ФУНКЦИЯ УСТАНОВКИ ПАКЕТОВ
+# Обслуживает разделы: Базовые, Modern CLI, DevOps, GUI
+# ============================================================================
+install_package_category() {
+    local category_name="$1"
+    shift
+    local items_list=("$@")
+
+    local names=()
+    local packages=()
+    
+    for item in "${items_list[@]}"; do
+        names+=("${item%%:*}")
+        packages+=("${item##*:}")
+    done
+
+    declare -A installed_map
+    for pkg in "${packages[@]}"; do
+        local check_pkg="${pkg%% *}"
+        if dpkg-query -W -f='${Status}' "$check_pkg" 2>/dev/null | grep -q "installed"; then
+            installed_map["$pkg"]=1
+        fi
+    done
+
+    local page=0
+    local page_size=15
+    local total_pages=$(( (${#names[@]} + page_size - 1) / page_size ))
+    declare -A user_selection
+
+    show_page() {
+        clear
+        local start=$((page * page_size))
+        local end=$((start + page_size - 1))
+        (( end >= ${#names[@]} )) && end=$(( ${#names[@]} - 1 ))
+        
+        echo "=== $category_name (страница $((page+1))/$total_pages) ==="
+        echo "  [✓] - выбрано / установлено, [ ] - пропустить"
+        echo ""
+        for (( i=start; i<=end; i++ )); do
+            local name="${names[$i]}"
+            local pkg="${packages[$i]}"
+            local status_char="[ ]"
+            
+            if [[ -n "${installed_map[$pkg]}" ]]; then
+                status_char="[✓]" 
+            elif [[ -n "${user_selection[$pkg]}" ]]; then
+                status_char="[✓]" 
+            fi
+            
+            printf "%3d. %s %s\n" $((i+1)) "$status_char" "$name"
+        done
+        echo ""
+        echo "Управление: <номер> - выбрать | a/d - страницы | i - установить | q - выход"
+        echo -n "Ваш ввод: "
+    }
+
+    toggle_item() {
+        local idx=$1
+        if (( idx >= 1 && idx <= ${#packages[@]} )); then
+            local pkg="${packages[$((idx-1))]}"
+            if [[ -n "${installed_map[$pkg]}" ]]; then
+                echo "Пакет/Утилита '$pkg' уже установлена."
+                read -p "Нажмите Enter..."
+            else
+                if [[ -n "${user_selection[$pkg]}" ]]; then
+                    unset 'user_selection[$pkg]'
+                else
+                    user_selection["$pkg"]=1
+                fi
+            fi
+        else
+            echo "Номер вне диапазона"
+            read -p "Нажмите Enter..."
+        fi
+    }
+
+    while true; do
+        show_page
+        read -r input
+        case "$input" in
+            q|Q) break ;;
+            i|I)
+                local to_install=()
+                for pkg in "${packages[@]}"; do
+                    if [[ -n "${user_selection[$pkg]}" ]] && [[ -z "${installed_map[$pkg]}" ]]; then
+                        to_install+=("$pkg")
+                    fi
+                done
+                
+                if [[ ${#to_install[@]} -eq 0 ]]; then
+                    echo "Нечего устанавливать. Отметьте пункты галочками."
+                    read -p "Нажмите Enter..."
+                else
+                    echo "Будут установлены: ${to_install[*]}"
+                    echo -n "Подтвердить? (y/n): "
+                    read -r confirm
+                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                        sudo apt update
+                        
+                        for pkg in "${to_install[@]}"; do
+                            if [[ "$pkg" == "extract-script" ]]; then
+                                echo "Запуск установки Extract..."
+                                curl -L -o install_extract.sh https://raw.githubusercontent.com/xvoland/Extract/master/install_extract.sh
+                                if [ -f install_extract.sh ]; then
+                                    bash install_extract.sh
+                                    rm install_extract.sh
+                                    echo "✓ Extract успешно установлен!"
+                                else
+                                    echo "✗ Ошибка скачивания скрипта Extract"
+                                fi
+                            
+                            elif [[ "$pkg" == "docker.io" ]]; then
+                                sudo apt install -y "$pkg"
+                                echo "Добавляю пользователя в группу docker..."
+                                sudo usermod -aG docker $USER
+                                echo "✓ Готово! Перезайдите в систему для работы с docker без sudo."
+                            
+                            else
+                                sudo apt install -y "$pkg"
+                            fi
+                        done
+                        
+                        for pkg in "${to_install[@]}"; do installed_map["$pkg"]=1; done
+                        echo "✓ Все выбранные операции завершены!"
+                        read -p "Нажмите Enter..."
+                    fi
+                fi
+                ;;
+            a|A) (( page > 0 )) && ((page--)) || { echo "Первая страница"; read -p "Enter..."; } ;;
+            d|D) (( page < total_pages - 1 )) && ((page++)) || { echo "Последняя страница"; read -p "Enter..."; } ;;
+            "") continue ;;
+            *)
+                if [[ "$input" =~ ^[0-9]+$ ]]; then toggle_item "$input"
+                else echo "Используйте числа, a, d, i или q"; read -p "Enter..."; fi
+                ;;
+        esac
+    done
 }
 
-# ---- Функция установки Zsh + Oh My Zsh ----
+# ============================================================================
+# КАТЕГОРИИ УСТАНОВКИ
+# ============================================================================
+
+install_basic_utils() {
+    install_package_category "Базовые утилиты" \
+        "Git:git" \
+        "Curl:curl" \
+        "Wget:wget" \
+        "Build-Essential (gcc/make):build-essential" \
+        "Htop:htop" \
+        "Btop:btop" \
+        "Jq:jq" \
+        "Vim:vim" \
+        "Nano:nano"
+}
+
+install_modern_cli() {
+    install_package_category "Modern CLI Tools" \
+        "Bat (cat с подсветкой):bat" \
+        "Eza (современный ls):eza" \
+        "Ripgrep (быстрый grep):ripgrep" \
+        "Fd (быстрый find):fd-find" \
+        "Zoxide (умный cd):zoxide" \
+        "Dust (анализ диска):dust" \
+        "Procs (монитор процессов):procs" \
+        "Sd (поиск/замена текста):sd" \
+        "Extract (универсальный распаковщик):extract-script"
+}
+
+install_devops_tools() {
+    install_package_category "DevOps & Monitoring" \
+        "Docker:docke r.io" \
+        "Docker Compose:docker-compose" \
+        "Terraform:terraform" \
+        "Ansible:ansible" \
+        "Kubectl:kubectl" \
+        "Helm:helm" \
+        "Minikube:minikube" \
+        "Prometheus:prometheus" \
+        "Grafana:grafana" \
+        "Loki:loki"
+}
+
+install_gui_apps() {
+    install_package_category "Графические приложения" \
+        "Firefox:firefox" \
+        "VS Code:code" \
+        "Telegram Desktop:telegram-desktop" \
+        "MAX (уточните пакет):max"
+}
+
+# ============================================================================
+# ZSH + OH MY ZSH
+# ============================================================================
+
 install_Zsh_OMZ_plugins() {
     if command -v zsh &>/dev/null; then
         echo "Zsh уже установлен"
     else
         sudo apt update && sudo apt install -y zsh
         echo "Установка Zsh завершена!" 
-        
     fi
 
     if [ -d "$HOME/.oh-my-zsh" ]; then
         echo "Oh My Zsh уже установлен"
     else 
         if ! command -v curl &>/dev/null; then
-            echo "Устанавливаю curl для установки Oh My Zsh"
+            echo "Устанавливаю curl..."
             sudo apt install -y curl
         fi
         if command -v curl &>/dev/null; then
@@ -34,17 +221,22 @@ install_Zsh_OMZ_plugins() {
     fi
 }
 
-# ---- Функция управления встроенными плагинами ----
+# ============================================================================
+# УПРАВЛЕНИЕ ПЛАГИНАМИ OH MY ZSH
+# ============================================================================
+
 manage_zsh_plugins() {
     local zshrc="$HOME/.zshrc"
     local omz_dir="$HOME/.oh-my-zsh"
 
     if [[ ! -d "$omz_dir" ]]; then
-        echo "Oh My Zsh не установлен. Сначала выполните пункт 3."
+        echo "Oh My Zsh не установлен. Сначала выполните пункт 6."
+        read -p "Нажмите Enter..."
         return 1
     fi
     if [[ ! -f "$zshrc" ]]; then
         echo "Файл $zshrc не найден."
+        read -p "Нажмите Enter..."
         return 1
     fi
 
@@ -52,6 +244,7 @@ manage_zsh_plugins() {
     
     if [[ ${#all_builtin_plugins[@]} -eq 0 ]]; then
         echo "Нет встроенных плагинов."
+        read -p "Нажмите Enter..."
         return 1
     fi
 
@@ -59,6 +252,7 @@ manage_zsh_plugins() {
     current_line=$(grep -E '^plugins=\(.*\)' "$zshrc")
     if [[ -z "$current_line" ]]; then
         echo "В .zshrc нет строки plugins=(...). Добавьте её вручную."
+        read -p "Нажмите Enter..."
         return 1
     fi
     
@@ -83,7 +277,7 @@ manage_zsh_plugins() {
         local end=$((start + page_size - 1))
         (( end >= ${#all_builtin_plugins[@]} )) && end=$(( ${#all_builtin_plugins[@]} - 1 ))
         
-        echo "=== Встроенные плагины Oh My Zsh (страница $((page+1))/$total_pages) ==="
+        echo "=== Плагины Oh My Zsh (страница $((page+1))/$total_pages) ==="
         echo "  [✓] - включён, [ ] - выключен"
         for (( i=start; i<=end; i++ )); do
             local p="${all_builtin_plugins[i]}"
@@ -93,17 +287,13 @@ manage_zsh_plugins() {
                 printf "%3d. [ ] %s\n" $((i+1)) "$p"
             fi
         done
-        echo "--- Показано $((end-start+1)) из ${#all_builtin_plugins[@]} плагинов ---"
+        echo "--- Показано $((end-start+1)) из ${#all_builtin_plugins[@]} ---"
         echo ""
-        echo "Управление:"
-        echo "  <номер>         - вкл/выкл"
-        echo "  a/d             - назад/вперёд"
-        echo "  q               - сохранить и выйти"
-        echo ""
+        echo "Управление: <номер> - вкл/выкл | a/d - страницы | q - сохранить и выйти"
         echo -n "Ваш ввод: "
     }
 
-    toggle_plugin_by_index() {
+    toggle_plugin() {
         local idx=$1
         if (( idx >= 1 && idx <= ${#all_builtin_plugins[@]} )); then
             local p="${all_builtin_plugins[$((idx-1))]}"
@@ -113,7 +303,7 @@ manage_zsh_plugins() {
                 selected_builtin_map["$p"]=1
             fi
         else
-            echo "Номер $idx вне диапазона"
+            echo "Номер вне диапазона"
             read -p "Нажмите Enter..."
         fi
     }
@@ -121,33 +311,22 @@ manage_zsh_plugins() {
     while true; do
         show_page
         read -r input
-
         case "$input" in
             q|Q) break ;;
-            a|A)
-                if (( page > 0 )); then ((page--)); else echo "Первая страница"; read -p "Enter..."; fi ;;
-            d|D)
-                if (( page < total_pages - 1 )); then ((page++)); else echo "Последняя страница"; read -p "Enter..."; fi ;;
+            a|A) (( page > 0 )) && ((page--)) || { echo "Первая страница"; read -p "Enter..."; } ;;
+            d|D) (( page < total_pages - 1 )) && ((page++)) || { echo "Последняя страница"; read -p "Enter..."; } ;;
             "") continue ;;
             *)
-                if [[ "$input" =~ ^[0-9]+$ ]]; then
-                    toggle_plugin_by_index "$input"
-                else
-                    echo "Используйте числа или a/d/q"
-                    read -p "Нажмите Enter..."
-                fi
+                if [[ "$input" =~ ^[0-9]+$ ]]; then toggle_plugin "$input"
+                else echo "Используйте числа, a, d или q"; read -p "Enter..."; fi
                 ;;
         esac
     done
 
     local final_plugins=()
-    
     for p in "${all_builtin_plugins[@]}"; do
-        if [[ -n "${selected_builtin_map[$p]}" ]]; then
-            final_plugins+=("$p")
-        fi
+        [[ -n "${selected_builtin_map[$p]}" ]] && final_plugins+=("$p")
     done
-
     for p in "${current_all_plugins[@]}"; do
         if [[ ! " ${all_builtin_plugins[*]} " =~ " $p " ]]; then
             final_plugins+=("$p")
@@ -167,417 +346,51 @@ manage_zsh_plugins() {
     cp "$zshrc" "$zshrc.bak"
     sed -i "s|^plugins=(.*)|$new_line|" "$zshrc"
     
-    echo "$zshrc обновлён."
-    echo "Сохранено плагинов: ${#unique_plugins[@]}"
+    echo "✓ .zshrc обновлён. Резервная копия: $zshrc.bak"
     echo "Не забудьте: source ~/.zshrc"
 }
 
-# ---- Функция выбора и установки базовых утилит ----
-manage_basic_utils() {
-    local utils_list=(
-        "git:git"
-        "curl:curl"
-        "wget:wget"
-        "build-essential (компиляторы gcc/make):build-essential"
-        "htop:htop"
-        "jq:jq"
-        "vim (текстовый редактор):vim"
-        "nano (простой редактор):nano"
-        "python3-pip (менеджер пакетов Python):python3-pip"
-        "node.js (среда выполнения JS):nodejs"
-        "npm (менеджер пакетов Node):npm"
-    )
+# ============================================================================
+# ОБНОВЛЕНИЕ СИСТЕМЫ
+# ============================================================================
 
-    local names=()
-    local packages=()
-    
-    for item in "${utils_list[@]}"; do
-        names+=("${item%%:*}")
-        packages+=("${item##*:}")
-    done
-
-    declare -A installed_map
-    for pkg in "${packages[@]}"; do
-        if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "installed"; then
-            installed_map["$pkg"]=1
-        fi
-    done
-
-    local page=0
-    local page_size=15
-    local total_pages=$(( (${#names[@]} + page_size - 1) / page_size ))
-    
-    declare -A user_selection
-
-    show_page() {
-        clear
-        local start=$((page * page_size))
-        local end=$((start + page_size - 1))
-        (( end >= ${#names[@]} )) && end=$(( ${#names[@]} - 1 ))
-        
-        echo "=== Базовые утилиты (страница $((page+1))/$total_pages) ==="
-        echo "  [✓] - выбрано к установке / уже стоит, [ ] - пропустить"
-        echo ""
-        for (( i=start; i<=end; i++ )); do
-            local name="${names[$i]}"
-            local pkg="${packages[$i]}"
-            local status_char="[ ]"
-            
-            if [[ -n "${installed_map[$pkg]}" ]]; then
-                status_char="[✓]" 
-            elif [[ -n "${user_selection[$pkg]}" ]]; then
-                status_char="[✓]" 
-            fi
-            
-            printf "%3d. %s %s\n" $((i+1)) "$status_char" "$name"
-        done
-        echo ""
-        echo "Управление:"
-        echo "  <номер>       - выбрать/снять выбор"
-        echo "  a/d           - назад/вперёд"
-        echo "  i             - установить выбранное"
-        echo "  q             - выход"
-        echo ""
-        echo -n "Ваш ввод: "
-    }
-
-    toggle_util_by_index() {
-        local idx=$1
-        if (( idx >= 1 && idx <= ${#packages[@]} )); then
-            local pkg="${packages[$((idx-1))]}"
-            
-            if [[ -n "${installed_map[$pkg]}" ]]; then
-                echo "Пакет '$pkg' уже установлен в системе."
-                read -p "Нажмите Enter..."
-            else
-                if [[ -n "${user_selection[$pkg]}" ]]; then
-                    unset 'user_selection[$pkg]'
-                else
-                    user_selection["$pkg"]=1
-                fi
-            fi
-        else
-            echo "Номер $idx вне диапазона"
-            read -p "Нажмите Enter..."
-        fi
-    }
-
-    while true; do
-        show_page
-        read -r input
-
-        case "$input" in
-            q|Q) break ;;
-            i|I)
-                local to_install=()
-                for pkg in "${packages[@]}"; do
-                    if [[ -n "${user_selection[$pkg]}" ]] && [[ -z "${installed_map[$pkg]}" ]]; then
-                        to_install+=("$pkg")
-                    fi
-                done
-
-                if [[ ${#to_install[@]} -eq 0 ]]; then
-                    echo "Нечего устанавливать. Отметьте нужные утилиты галочками."
-                    read -p "Нажмите Enter..."
-                else
-                    echo "Будут установлены: ${to_install[*]}"
-                    echo -n "Подтвердить установку? (y/n): "
-                    read -r confirm
-                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                        sudo apt update
-                        sudo apt install -y "${to_install[@]}"
-                        for pkg in "${to_install[@]}"; do
-                            installed_map["$pkg"]=1
-                        done
-                        echo "Установка завершена!"
-                        read -p "Нажмите Enter..."
-                    fi
-                fi
-                ;;
-            a|A)
-                if (( page > 0 )); then ((page--)); else echo "Первая страница"; read -p "Enter..."; fi ;;
-            d|D)
-                if (( page < total_pages - 1 )); then ((page++)); else echo "Последняя страница"; read -p "Enter..."; fi ;;
-            "") continue ;;
-            *)
-                if [[ "$input" =~ ^[0-9]+$ ]]; then
-                    toggle_util_by_index "$input"
-                else
-                    echo "Используйте числа, a, d, i или q"
-                    read -p "Нажмите Enter..."
-                fi
-                ;;
-        esac
-    done
+update_system() {
+    echo "Полное обновление системы..."
+    sudo apt update && sudo apt full-upgrade -y && sudo apt autoremove -y && sudo apt autoclean -y
+    echo "✓ Система обновлена"
 }
 
-# ---- Функция управления темами Zsh ----
-manage_zsh_theme() {
-    local zshrc="$HOME/.zshrc"
-    local omz_dir="$HOME/.oh-my-zsh"
-    local themes_dir="$omz_dir/themes"
+# ============================================================================
+# ГЛАВНОЕ МЕНЮ
+# ============================================================================
 
-    if [[ ! -d "$omz_dir" ]]; then
-        echo "Oh My Zsh не установлен. Сначала выполните пункт 3."
-        return 1
-    fi
-    if [[ ! -f "$zshrc" ]]; then
-        echo "Файл $zshrc не найден."
-        return 1
-    fi
-
-    mapfile -t all_themes < <(find "$themes_dir" -maxdepth 1 -name "*.zsh-theme" -printf "%f\n" | sed 's/\.zsh-theme$//' | sort)
-    if [[ ${#all_themes[@]} -eq 0 ]]; then
-        echo "Темы не найдены в $themes_dir"
-        return 1
-    fi
-
-    local current_theme="robbyrussell"
-    local theme_line
-    theme_line=$(grep -E '^ZSH_THEME=' "$zshrc")
-    if [[ -n "$theme_line" ]]; then
-        current_theme=$(echo "$theme_line" | sed -E 's/^ZSH_THEME=["'"'"']?([^"'"'"']+)["'"'"']?$/\1/')
-    fi
-
-    local selected_theme="$current_theme"
-    local page=0
-    local page_size=20
-    local total_pages=$(( (${#all_themes[@]} + page_size - 1) / page_size ))
-
-    show_page() {
-        clear
-        local start=$((page * page_size))
-        local end=$((start + page_size - 1))
-        (( end >= ${#all_themes[@]} )) && end=$(( ${#all_themes[@]} - 1 ))
-        
-        echo "=== Темы Oh My Zsh (страница $((page+1))/$total_pages) ==="
-        echo "Текущая сохраненная тема: $current_theme"
-        echo "  [✓] - выбрана сейчас"
-        echo ""
-        for (( i=start; i<=end; i++ )); do
-            local t="${all_themes[i]}"
-            if [[ "$t" == "$selected_theme" ]]; then
-                printf "%3d. [✓] %s\n" $((i+1)) "$t"
-            else
-                printf "%3d. [ ] %s\n" $((i+1)) "$t"
-            fi
-        done
-        echo "--- Показано $((end-start+1)) из ${#all_themes[@]} тем ---"
-        echo ""
-        echo "Управление:"
-        echo "  <номер>       - выбрать тему"
-        echo "  a/d           - назад/вперёд"
-        echo "  s             - сохранить и выйти"
-        echo "  q             - выйти без сохранения"
-        echo ""
-        echo -n "Ваш ввод: "
-    }
-
-    select_theme_by_index() {
-        local idx=$1
-        if (( idx >= 1 && idx <= ${#all_themes[@]} )); then
-            selected_theme="${all_themes[$((idx-1))]}"
-        else
-            echo "Номер $idx вне диапазона (1-${#all_themes[@]})"
-            read -p "Нажмите Enter..."
-        fi
-    }
-
-    while true; do
-        show_page
-        read -r input
-        case "$input" in
-            s|S) break ;;
-            q|Q) echo "Изменения отменены."; return 0 ;;
-            a|A) (( page > 0 )) && ((page--)) || { echo "Первая страница"; read -p "Enter..."; } ;;
-            d|D) (( page < total_pages - 1 )) && ((page++)) || { echo "Последняя страница"; read -p "Enter..."; } ;;
-            "") continue ;;
-            *)
-                if [[ "$input" =~ ^[0-9]+$ ]]; then
-                    select_theme_by_index "$input"
-                else
-                    echo "Используйте числа, a, d, s или q."
-                    read -p "Нажмите Enter..."
-                fi
-                ;;
-        esac
-    done
-
-    if [[ "$selected_theme" == "$current_theme" ]]; then
-        echo "Тема не была изменена."
-        return 0
-    fi
-
-    cp "$zshrc" "$zshrc.bak"
-    if grep -qE '^ZSH_THEME=' "$zshrc"; then
-        sed -i "s|^ZSH_THEME=.*|ZSH_THEME=\"$selected_theme\"|" "$zshrc"
-    else
-        sed -i "1i ZSH_THEME=\"$selected_theme\"" "$zshrc"
-    fi
-
-    echo "Тема изменена на: $selected_theme"
-    echo "Резервная копия: $zshrc.bak"
-    echo "Выполните: source ~/.zshrc"
-}
-
-# ---- Функция управления сторонними плагинами ----
-manage_external_plugins() {
-    # ПРОВЕРКА GIT
-    if ! command -v git &>/dev/null; then
-        echo "ОШИБКА: Git не установлен!"
-        echo "Установите его через пункт 2 или вручную: sudo apt install git"
-        read -p "Нажмите Enter..."
-        return 1
-    fi
-
-    local custom_plugins_dir="$HOME/.oh-my-zsh/custom/plugins"
-    local zshrc="$HOME/.zshrc"
-
-    if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
-        echo "Oh My Zsh не установлен. Сначала выполните пункт 3."
-        return 1
-    fi
-    mkdir -p "$custom_plugins_dir"
-
-    declare -A known_plugins=(
-        ["zsh-autosuggestions"]="https://github.com/zsh-users/zsh-autosuggestions"
-        ["zsh-syntax-highlighting"]="https://github.com/zsh-users/zsh-syntax-highlighting"
-        ["zsh-history-substring-search"]="https://github.com/zsh-users/zsh-history-substring-search"
-        ["zsh-completions"]="https://github.com/zsh-users/zsh-completions"
-        ["fzf-tab"]="https://github.com/Aloxaf/fzf-tab"
-    )
-
-    local current_line
-    current_line=$(grep -E '^plugins=\(.*\)' "$zshrc")
-    if [[ -z "$current_line" ]]; then
-        echo "В .zshrc нет строки plugins=(...). Сначала настройте встроенные плагины (пункт 4)."
-        return 1
-    fi
-    
-    local plugins_str
-    plugins_str=$(echo "$current_line" | sed -E 's/^plugins=\(//' | sed -E 's/\)$//' | tr -d '"' | tr -d "'")
-    IFS=' ' read -r -a current_zsh_plugins <<< "$plugins_str"
-
-    local ext_names=()
-    declare -A ext_urls
-    for name in "${!known_plugins[@]}"; do
-        ext_names+=("$name")
-        ext_urls["$name"]="${known_plugins[$name]}"
-    done
-    IFS=$'\n' sorted_names=($(sort <<<"${ext_names[*]}")); unset IFS
-
-    declare -A installed_map
-    for name in "${sorted_names[@]}"; do
-        if [[ -d "$custom_plugins_dir/$name" ]]; then
-            installed_map["$name"]=1
-            if [[ ! " ${current_zsh_plugins[*]} " =~ " $name " ]]; then
-                sed -i "s/^plugins=(\(.*\))/plugins=(\1 $name)/" "$zshrc"
-                current_zsh_plugins+=("$name")
-            fi
-        fi
-    done
-
-    while true; do
-        clear
-        echo "=== Сторонние плагины ==="
-        echo "  [✓] - установлен и включен"
-        echo "  [ ] - не установлен"
-        echo ""
-        
-        local idx=1
-        for name in "${sorted_names[@]}"; do
-            if [[ -n "${installed_map[$name]}" ]]; then
-                printf "%3d. [✓] %s\n" $idx "$name"
-            else
-                printf "%3d. [ ] %s\n" $idx "$name"
-            fi
-            ((idx++))
-        done
-        
-        echo ""
-        echo "q. Выход"
-        echo -n "Выберите номер для переключения: "
-        read -r input
-
-        case "$input" in
-            q|Q) break ;;
-            *)
-                if [[ "$input" =~ ^[0-9]+$ ]]; then
-                    local choice_idx=$((input))
-                    if (( choice_idx >= 1 && choice_idx <= ${#sorted_names[@]} )); then
-                        local selected_name="${sorted_names[$((choice_idx-1))]}"
-                        local repo_url="${ext_urls[$selected_name]}"
-                        local target_dir="$custom_plugins_dir/$selected_name"
-
-                        if [[ -n "${installed_map[$selected_name]}" ]]; then
-                            echo "Удаление плагина $selected_name..."
-                            rm -rf "$target_dir"
-                            sed -i "s/ $selected_name//g; s/$selected_name //g; s/$selected_name//g" "$zshrc"
-                            sed -i "s/  */ /g" "$zshrc"
-                            unset 'installed_map[$selected_name]'
-                            echo "Плагин удален."
-                        else
-                            echo "Установка плагина $selected_name..."
-                            
-                            if [[ -d "$target_dir" ]]; then
-                                echo "Папка уже существует. Подключаю к конфигу..."
-                            elif git clone "$repo_url" "$target_dir"; then
-                                echo "Клонирование успешно."
-                            else
-                                echo "ОШИБКА КЛОНИРОВАНИЯ!"
-                                echo "Проверьте интернет, доступность GitHub или права доступа."
-                                read -p "Нажмите Enter..."
-                                continue
-                            fi
-                            
-                            sed -i "s/^plugins=(\(.*\))/plugins=(\1 $selected_name)/" "$zshrc"
-                            installed_map["$selected_name"]=1
-                            echo "Плагин установлен и добавлен в конфиг."
-                        fi
-                        read -p "Нажмите Enter..."
-                    else
-                        echo "Неверный номер."
-                        read -p "Нажмите Enter..."
-                    fi
-                else
-                    echo "Введите номер или q."
-                    read -p "Нажмите Enter..."
-                fi
-                ;;
-        esac
-    done
-    echo "Не забудьте: source ~/.zshrc"
-}
-
-# ---- Меню ----
 options=(
     "1 - Полное обновление системы"
     "2 - Установка базовых утилит"
-    "3 - Установка Zsh + Oh My Zsh"
-    "4 - Управление встроенными плагинами Zsh"
-    "5 - Управление сторонними плагинами"
-    "6 - Выбор темы Zsh"
+    "3 - Установка Modern CLI"
+    "4 - Установка DevOps инструментов"
+    "5 - Установка графических приложений"
+    "6 - Установка Zsh + Oh My Zsh"
+    "7 - Управление плагинами Oh My Zsh"
     "0 - Выход"
 )
 
 while true; do
+    clear
     echo "=== МЕНЮ ==="
     PS3="Выберите номер действия: "
 
     select choice in "${options[@]}"; do
         case $REPLY in
             1) update_system; break ;;
-            2) manage_basic_utils; break ;;
-            3) install_Zsh_OMZ_plugins; break ;;
-            4) manage_zsh_plugins; break ;;
-            5) manage_external_plugins; break ;;
-            6) manage_zsh_theme; break ;;
+            2) install_basic_utils; break ;;
+            3) install_modern_cli; break ;;
+            4) install_devops_tools; break ;;
+            5) install_gui_apps; break ;;
+            6) install_Zsh_OMZ_plugins; break ;;
+            7) manage_zsh_plugins; break ;;
             0) echo "Выход"; exit 0 ;;
-            *) echo "Неправильный ввод" ;;
+            *) echo "Неправильный ввод"; sleep 1; break ;;
         esac
     done
-
-    echo ""
-    read -p "Нажмите Enter, чтобы продолжить"
-    echo ""
 done

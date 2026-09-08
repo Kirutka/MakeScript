@@ -1,23 +1,49 @@
-Полное обновление системы + 
-Установка базовых пакетов 
-Установка Zsh + Oh My Zsh +
-Управление плагинами Zsh +
-Установка Docker + Docker Compose
-Установка kubectl
-Установка Terraform 
-Установка Grafana 
-Установка Loki
-Установка Prometheus
-Helm
-Firefox
-VS Code
-Docker Desktop
-Telegram
-MAX
+1. Полное обновление системы 
 
-docker.io
-docker-compose-v2
-grafana 
-loki 
-prometheus 
-helm 
+2. Установка базовых утилит (
+    git 
+    curl 
+    wget 
+    gcc/make
+    htop
+    btop
+    jq
+    vim 
+    nano
+)
+
+3. Установка Modern CLI (
+    bat 
+    eza 
+    ripgrep
+    fd 
+    zoxide 
+    dust 
+    procs 
+    sd 
+    extract
+)
+4. Установка DevOps инструментов (
+    docker 
+    docker-compose 
+    terraform 
+    ansible 
+    kubectl 
+    helm 
+    minikube 
+    prometheus 
+    grafana 
+    loki
+)
+5. Установка графических приложений (
+    firefox 
+    vs code 
+    telegram-desktop 
+    MAX 
+)
+
+6. Установка Zsh + Oh My Zsh
+
+7. Управление плагинами Oh My Zsh 
+
+0. Выход
